@@ -8,10 +8,9 @@ import io.vertx.core.http.HttpClient
 import io.vertx.core.http.HttpClientOptions
 import io.vertx.core.http.RequestOptions
 import kotlinx.coroutines.experimental.CompletableDeferred
-import java.io.File
 import java.time.LocalDateTime
 
-class Context(private val apiKey: String, private val imageDirectory: String) {
+class Context(private val apiKey: String) {
 
 	private val vertx = Vertx.vertx()!!
 	private val httpClient: HttpClient
@@ -26,7 +25,7 @@ class Context(private val apiKey: String, private val imageDirectory: String) {
 		httpClient = vertx.createHttpClient(options)
 
 		val gsonBuilder = GsonBuilder()
-		gsonBuilder.registerTypeAdapter(LocalDateTime::class.java, LocalDateTimeDeserializer())
+		gsonBuilder.registerTypeAdapter(LocalDateTime::class.java, LocalDateTimeSerializer())
 		gsonBuilder.create()
 
 		gson = gsonBuilder.create()
@@ -89,26 +88,15 @@ class Context(private val apiKey: String, private val imageDirectory: String) {
 	suspend fun download(host: String, uri: String, isSSL: Boolean, filename: String): String {
 		val img = fetch(host, uri, isSSL)
 
-		println("writing file $imageDirectory$filename")
+		println("writing file $filename")
 		val future = CompletableDeferred<String>()
-		vertx.fileSystem().writeFile("$imageDirectory$filename", img) {
+		vertx.fileSystem().writeFile(filename, img) {
 			if (it.failed()) future.completeExceptionally(it.cause())
-			else future.complete("$imageDirectory$filename")
+			else future.complete(filename)
 		}
-		future.complete("$imageDirectory$filename")
-		println("awaiting $imageDirectory$filename")
+		future.complete(filename)
+		println("awaiting $filename")
 		return future.await()
-	}
-
-	fun readFile(filename: String) : String? {
-		val f = File("$imageDirectory$filename")
-		if(!f.exists())
-			return null
-		return f.readText()
-	}
-
-	fun writeFile(filename: String, data: String) {
-		File("$imageDirectory$filename").writeText(data)
 	}
 
 	fun close() {

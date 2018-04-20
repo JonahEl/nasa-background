@@ -3,3 +3,6 @@
 .vertx
 /build/*
 /out/*
+
+latest-nasa.*
+/images/*
