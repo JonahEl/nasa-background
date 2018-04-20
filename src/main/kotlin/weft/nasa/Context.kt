@@ -8,6 +8,7 @@ import io.vertx.core.http.HttpClient
 import io.vertx.core.http.HttpClientOptions
 import io.vertx.core.http.RequestOptions
 import kotlinx.coroutines.experimental.CompletableDeferred
+import java.io.File
 import java.time.LocalDateTime
 
 class Context(private val apiKey: String, private val imageDirectory: String) {
@@ -97,6 +98,17 @@ class Context(private val apiKey: String, private val imageDirectory: String) {
 		future.complete("$imageDirectory$filename")
 		println("awaiting $imageDirectory$filename")
 		return future.await()
+	}
+
+	fun readFile(filename: String) : String? {
+		val f = File("$imageDirectory$filename")
+		if(!f.exists())
+			return null
+		return f.readText()
+	}
+
+	fun writeFile(filename: String, data: String) {
+		File("$imageDirectory$filename").writeText(data)
 	}
 
 	fun close() {
