@@ -4,6 +4,8 @@ import kotlinx.coroutines.experimental.async
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
+import java.time.Instant
+import java.time.temporal.ChronoUnit
 
 class AppMain {
 
@@ -13,8 +15,8 @@ class AppMain {
 			val cxt = Fetcher("api_key=${args[0]}")
 			val imageDirectory = File(args[1])
 			val tmpImageDirectory = File("${args[1]}tmp/")
-			val outputFile = "latest-nasa.png"
-			val cacheFile = imageDirectory.toSubFile("last.json")
+			val outputFile = "nasa.png"
+			val cacheFile = imageDirectory.toSubFile("metadata.json")
 			val refetchMetadata = false
 
 			imageDirectory.mkdirs()
@@ -24,7 +26,7 @@ class AppMain {
 
 				//get the image metadata
 				val metadata: Array<ImageMetaData>
-				if(refetchMetadata || !cacheFile.exists()) {
+				if (refetchMetadata || cacheFile.isOlderThan(Instant.now().minus(1, ChronoUnit.DAYS))) {
 					metadata = cxt.fetch("api.nasa.gov", "/EPIC/api/natural", Array<ImageMetaData>::class.java)
 					cacheFile.writeJson(metadata)
 				}
