@@ -43,3 +43,12 @@ run {
 }
 
 mainClassName = "weft.nasa.AppMain"
+
+jar {
+    manifest {
+        attributes 'Main-Class': mainClassName
+    }
+
+    // NEW LINE HERE !!!
+    from { configurations.compile.collect { it.isDirectory() ? it : zipTree(it) } }
+}

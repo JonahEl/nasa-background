@@ -7,4 +7,8 @@ Makes completely overkill usage of [Vertx](https://vertx.io) and Kotlin's corout
 Also uses [Gson](https://github.com/google/gson) for Json serialization 
 and [Clikt](https://github.com/ajalt/clikt) for command line parsing.
 
+To run:
+gradlw jar
+java -jar build\libs\nasa-background.jar --apikey **YOUR_API_KEY** --dest **OUTPUT_DIR** --random --wallpaper
+
 **Note: This is play code not professional. So there is minimal documentation and no tests**
