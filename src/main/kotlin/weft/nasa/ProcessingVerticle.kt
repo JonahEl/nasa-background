@@ -13,6 +13,7 @@ import java.io.File
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.time.Instant
+import java.util.concurrent.atomic.AtomicInteger
 
 class ProcessingVerticle(private val queryStringAppend: String = "", private val useSSL: Boolean = true) : AbstractVerticle() {
 	private var httpClient: HttpClient? = null
@@ -113,13 +114,16 @@ class ProcessingVerticle(private val queryStringAppend: String = "", private val
 
 	companion object {
 		fun deploy(vertx: Vertx, count: Int) {
-			var deployComplete = 0
-			for (i in 0..count) {
+			val deployComplete = AtomicInteger(0)
+			for (i in 0 until count) {
 				vertx.deployVerticle(ProcessingVerticle::class.java.canonicalName, DeploymentOptions().setWorker(true)) {
-					deployComplete++
+					deployComplete.incrementAndGet()
+					println("deployed $deployComplete of $count")
 				}
 			}
-			while (deployComplete < count)
+
+			//needs timout
+			while (deployComplete.get() < count)
 				Thread.sleep(100)
 		}
 	}

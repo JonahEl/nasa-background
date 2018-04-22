@@ -3,15 +3,18 @@ package weft.nasa
 import com.google.gson.Gson
 import com.google.gson.GsonBuilder
 import io.vertx.core.buffer.Buffer
+import io.vertx.core.eventbus.EventBus
 import java.io.File
 import java.time.Instant
 import java.time.LocalDateTime
-
-fun File.toSubPath(subPath: String) = File(absolutePath).toPath().resolve(subPath)!!
-fun File.toSubFile(subPath: String) = File(absolutePath).toPath().resolve(subPath).toFile()!!
+import java.util.*
 
 fun <T> String.fromJson(classOfT: Class<T>) = GsonCache.gson.fromJson(this, classOfT)!!
 
+fun <T> List<T>.random() = this[Random().nextInt(this.size)]
+
+fun File.toSubPath(subPath: String) = File(absolutePath).toPath().resolve(subPath)!!
+fun File.toSubFile(subPath: String) = File(absolutePath).toPath().resolve(subPath).toFile()!!
 fun <T> File.readJson(classOfT: Class<T>) = this.readText().fromJson(classOfT)
 fun File.writeJson(obj: Any?) = this.writeText(GsonCache.gson.toJson(obj))
 fun File.isOlderThan(dt: Instant?) = if (dt == null) false else if (exists()) lastModified() < dt.toEpochMilli() else true
@@ -48,3 +51,14 @@ fun <T : Any> Buffer.decode(position: Int, decodeHandler: (json: String) -> T): 
 	return decodeHandler(getString(position + 4, position + 4 + length))
 }
 
+fun <T> EventBus.sendAndWait(address: String, message: Any): T? {
+	var t: T? = null
+	this.send<T>(address, message) {
+		t = it.result().body()
+	}
+
+	while (t == null) {
+		Thread.sleep(100)
+	}
+	return t
+}
