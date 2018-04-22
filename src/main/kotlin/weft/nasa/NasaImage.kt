@@ -1,21 +1,24 @@
 package weft.nasa
 
-import kotlinx.coroutines.experimental.async
+import io.vertx.core.Vertx
+import weft.nasa.messages.FetchFileMessage
+import weft.nasa.messages.FetchImageMetaDataMessage
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.time.Instant
 import java.time.temporal.ChronoUnit
+import java.util.concurrent.ConcurrentHashMap
 
-class NasaImage(apiKey: String, outputPath: String, private val outputFile: String = "nasa.png", private val refetchMetadata: Boolean = false) {
-	private val fetcher = Fetcher("api_key=$apiKey")
+
+class NasaImage(val apiKey: String, outputPath: String, private val outputFile: String = "nasa.png", private val refetchMetadata: Boolean = false) {
 	private val outputDirectory = File(outputPath)
 	private val tmpDirectory = outputDirectory.toSubFile("tmp/")
 	private val cacheFile = outputDirectory.toSubFile("metadata.json")
 	private val imageExt = "png"
 	private val imagePrefix = "epic_"
 	private val apiHost = "api.nasa.gov"
-	private val epicMetadataApiUri = "/EPIC/api/natural"
+	private val epicMetadataApiUri = "/EPIC/api/natural?api_key=$apiKey"
 	private val epicApiHost = "epic.gsfc.nasa.gov"
 
 	init {
@@ -23,17 +26,17 @@ class NasaImage(apiKey: String, outputPath: String, private val outputFile: Stri
 		require(outputFile.endsWith(".$imageExt")) { "The output file must be a .$imageExt" }
 	}
 
-	private fun epicImageUriBuilder(md: ImageMetaData) = "/archive/natural/%04d/%02d/%02d/$imageExt/${md.image}.$imageExt".format(md.date.year, md.date.monthValue, md.date.dayOfMonth)
+	private fun epicImageUriBuilder(md: ImageMetaData) = "/archive/natural/%04d/%02d/%02d/$imageExt/${md.image}.$imageExt?api_key=$apiKey".format(md.date.year, md.date.monthValue, md.date.dayOfMonth)
 
-	private suspend fun fetchMetadata(): Array<ImageMetaData> {
-		val metadata: Array<ImageMetaData>
-		if (refetchMetadata || cacheFile.isOlderThan(Instant.now().minus(1, ChronoUnit.DAYS))) {
-			metadata = fetcher.fetch(apiHost, epicMetadataApiUri, Array<ImageMetaData>::class.java)
-			cacheFile.writeJson(metadata)
-		} else
-			metadata = cacheFile.readJson(Array<ImageMetaData>::class.java)
-		return metadata
-	}
+//	private suspend fun fetchMetadata(): Array<ImageMetaData> {
+//		val metadata: Array<ImageMetaData>
+//		if (refetchMetadata || cacheFile.isOlderThan(Instant.now().minus(1, ChronoUnit.DAYS))) {
+//			metadata = fetcher.fetch(apiHost, epicMetadataApiUri, Array<ImageMetaData>::class.java)
+//			cacheFile.writeJson(metadata)
+//		} else
+//			metadata = cacheFile.readJson(Array<ImageMetaData>::class.java)
+//		return metadata
+//	}
 
 	private fun listImages(): List<String> {
 		return outputDirectory.list()
@@ -50,19 +53,19 @@ class NasaImage(apiKey: String, outputPath: String, private val outputFile: Stri
 				}
 	}
 
-	private suspend fun getImagesIfMissing(metadata: Array<ImageMetaData>) {
-		metadata.forEach {
-			val tmp = tmpDirectory.toSubFile("${it.image}.$imageExt")
-			if (tmp.exists())
-				Files.move(tmp.toPath(),
-						outputDirectory.toSubPath("${it.image}.$imageExt"),
-						StandardCopyOption.REPLACE_EXISTING)
-			else
-				fetcher.download(epicApiHost,
-						epicImageUriBuilder(it),
-						outputDirectory.toSubPath("${it.image}.$imageExt").toString())
-		}
-	}
+//	private suspend fun getImagesIfMissing(metadata: Array<ImageMetaData>) {
+//		metadata.forEach {
+	//			val tmp = tmpDirectory.toSubFile("${it.image}.$imageExt")
+//			if (tmp.exists())
+//				Files.move(tmp.toPath(),
+//						outputDirectory.toSubPath("${it.image}.$imageExt"),
+//						StandardCopyOption.REPLACE_EXISTING)
+//			else
+//				fetcher.download(epicApiHost,
+//						epicImageUriBuilder(it),
+//						outputDirectory.toSubPath("${it.image}.$imageExt").toString())
+//		}
+//	}
 
 	private fun cleanTempDirectory() {
 		tmpDirectory.list().forEach { tmpDirectory.toSubFile(it).delete() }
@@ -78,39 +81,76 @@ class NasaImage(apiKey: String, outputPath: String, private val outputFile: Stri
 				.copyTo(outputDirectory.toSubFile(outputFile), true)
 	}
 
+	private fun fetchMetaData(vertx: Vertx, handler: (Map<String, ImageMetaData>) -> Unit) {
+		val mdCfg = FetchImageMetaDataMessage(apiHost,
+				epicMetadataApiUri,
+				cacheFile.absolutePath,
+				Instant.now().minus(1, ChronoUnit.DAYS),
+				refetchMetadata)
+
+		vertx.eventBus().send<List<ImageMetaData>>(FetchImageMetaDataMessage.address, mdCfg) {
+			if (it.failed()) {
+				it.cause().printStackTrace()
+				return@send
+			}
+			handler(it.result().body().map { md -> md.identifier to md }.toMap())
+		}
+	}
+
+	private fun fetchFile(vertx: Vertx, md: ImageMetaData, hanlder: () -> Unit) {
+		val cfg = FetchFileMessage(epicApiHost,
+				epicImageUriBuilder(md),
+				outputDirectory.toSubPath("${md.image}.$imageExt").toString(),
+				tmpDirectory.toSubPath("${md.image}.$imageExt").toString())
+
+		vertx.eventBus().send<Any>(FetchFileMessage.address, cfg) {
+			hanlder()
+		}
+	}
+
 	fun execute() {
+		val vertx = Vertx.vertx()
+
+		ProcessingVerticle.deploy(vertx)
+		FetchFileMessage.FetchFileMesssageCodec.register(vertx.eventBus())
+		FetchImageMetaDataMessage.FetchImageMetaDataMessageCodec.register(vertx.eventBus())
+
 		outputDirectory.mkdirs()
 		tmpDirectory.mkdirs()
 
-		val co = async {
+		//move the existing file to a tmp dir
+		moveImagesToTemp()
 
-			//get the image metadata
-			val metadata = fetchMetadata()
+		//get the image metadata
+		val fetchState = ConcurrentHashMap<String, Boolean>()
+		fetchMetaData(vertx) { metadata ->
+			metadata.forEach { t, _ -> fetchState[t] = false }
 
-			//move the existing file to a tmp dir
-			moveImagesToTemp()
-
-			//download each image if we don't have it already
-			//otherwise move it back to the top level
-			getImagesIfMissing(metadata)
-
-			//clean the tmp dir to get rid of any old files
-			cleanTempDirectory()
-
-			//copy the newest file to the output file
-			updateOutputImage()
-
-			println("async done")
+			//download each image if we don't have it already, otherwise move it back to the top level
+			metadata.forEach {
+				fetchFile(vertx, it.value) {
+					println("completed ${it.key}")
+					fetchState[it.key] = true
+				}
+			}
 		}
 
-		while (!co.isCompleted) {
+		//wait for completion
+		println("waiting for completion")
+		while (fetchState.isEmpty() || fetchState.any() { !it.value }) {
 			Thread.sleep(100)
 		}
+		Thread.sleep(1000)
 
-		if (co.isCompletedExceptionally)
-			co.getCompletionExceptionOrNull()?.printStackTrace()
+		println("cleaning")
+		//clean the tmp dir to get rid of any old files
+		cleanTempDirectory()
+
+		//copy the newest file to the output file
+		updateOutputImage()
 
 		println("closing")
-		fetcher.close()
+		vertx.close()
+		println("closed")
 	}
 }
