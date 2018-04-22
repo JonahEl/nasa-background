@@ -90,12 +90,13 @@ class ProcessingVerticle(private val queryStringAppend: String = "", private val
 					File(msg.outputFilename).toPath(),
 					StandardCopyOption.REPLACE_EXISTING)
 			handler()
-		} else
+		} else {
 			println("${msg.cacheFilename} doesn't exist. Downloading.")
-		download(msg.host,
-				msg.uri,
-				msg.outputFilename) {
-			handler()
+			download(msg.host,
+					msg.uri,
+					msg.outputFilename) {
+				handler()
+			}
 		}
 	}
 
@@ -111,12 +112,14 @@ class ProcessingVerticle(private val queryStringAppend: String = "", private val
 	}
 
 	companion object {
-		fun deploy(vertx: Vertx) {
-			var deployComplete = false
-			vertx.deployVerticle(ProcessingVerticle::class.java.canonicalName, DeploymentOptions().setWorker(true)) {
-				deployComplete = true
+		fun deploy(vertx: Vertx, count: Int) {
+			var deployComplete = 0
+			for (i in 0..count) {
+				vertx.deployVerticle(ProcessingVerticle::class.java.canonicalName, DeploymentOptions().setWorker(true)) {
+					deployComplete++
+				}
 			}
-			while (!deployComplete)
+			while (deployComplete < count)
 				Thread.sleep(100)
 		}
 	}

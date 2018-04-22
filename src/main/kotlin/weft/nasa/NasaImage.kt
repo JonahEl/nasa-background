@@ -1,6 +1,7 @@
 package weft.nasa
 
 import io.vertx.core.Vertx
+import io.vertx.core.eventbus.EventBus
 import weft.nasa.messages.FetchFileMessage
 import weft.nasa.messages.FetchImageMetaDataMessage
 import java.io.File
@@ -81,37 +82,45 @@ class NasaImage(val apiKey: String, outputPath: String, private val outputFile: 
 				.copyTo(outputDirectory.toSubFile(outputFile), true)
 	}
 
-	private fun fetchMetaData(vertx: Vertx, handler: (Map<String, ImageMetaData>) -> Unit) {
+	fun <T> EventBus.sendAndWait(address: String, message: Any): T? {
+		var t: T? = null
+		this.send<T>(address, message) {
+			t = it.result().body()
+		}
+
+		while (t == null) {
+			Thread.sleep(100)
+		}
+		return t
+	}
+
+	private fun fetchMetaData(vertx: Vertx): Map<String, ImageMetaData> {
 		val mdCfg = FetchImageMetaDataMessage(apiHost,
 				epicMetadataApiUri,
 				cacheFile.absolutePath,
 				Instant.now().minus(1, ChronoUnit.DAYS),
 				refetchMetadata)
 
-		vertx.eventBus().send<List<ImageMetaData>>(FetchImageMetaDataMessage.address, mdCfg) {
-			if (it.failed()) {
-				it.cause().printStackTrace()
-				return@send
-			}
-			handler(it.result().body().map { md -> md.identifier to md }.toMap())
-		}
+
+		val data = vertx.eventBus().sendAndWait<List<ImageMetaData>>(FetchImageMetaDataMessage.address, mdCfg)
+		return data?.map { md -> md.identifier to md }?.toMap() ?: HashMap<String, ImageMetaData>()
 	}
 
-	private fun fetchFile(vertx: Vertx, md: ImageMetaData, hanlder: () -> Unit) {
+	private fun fetchFile(vertx: Vertx, md: ImageMetaData, completed: () -> Unit) {
 		val cfg = FetchFileMessage(epicApiHost,
 				epicImageUriBuilder(md),
 				outputDirectory.toSubPath("${md.image}.$imageExt").toString(),
 				tmpDirectory.toSubPath("${md.image}.$imageExt").toString())
 
 		vertx.eventBus().send<Any>(FetchFileMessage.address, cfg) {
-			hanlder()
+			completed()
 		}
 	}
 
 	fun execute() {
 		val vertx = Vertx.vertx()
 
-		ProcessingVerticle.deploy(vertx)
+		ProcessingVerticle.deploy(vertx, 4)
 		FetchFileMessage.FetchFileMesssageCodec.register(vertx.eventBus())
 		FetchImageMetaDataMessage.FetchImageMetaDataMessageCodec.register(vertx.eventBus())
 
@@ -122,17 +131,19 @@ class NasaImage(val apiKey: String, outputPath: String, private val outputFile: 
 		moveImagesToTemp()
 
 		//get the image metadata
-		val fetchState = ConcurrentHashMap<String, Boolean>()
-		fetchMetaData(vertx) { metadata ->
-			metadata.forEach { t, _ -> fetchState[t] = false }
+		val metadata = fetchMetaData(vertx)
 
-			//download each image if we don't have it already, otherwise move it back to the top level
-			metadata.forEach {
-				fetchFile(vertx, it.value) {
-					println("completed ${it.key}")
-					fetchState[it.key] = true
-				}
+		val fetchState = ConcurrentHashMap<String, Boolean>()
+		metadata.forEach { t, _ -> fetchState[t] = false }
+
+		//download each image if we don't have it already, otherwise move it back to the top level
+		metadata.forEach {
+			println("sending ${it.key}")
+			fetchFile(vertx, it.value) {
+				println("completed ${it.key}")
+				fetchState[it.key] = true
 			}
+			println("sent ${it.key}")
 		}
 
 		//wait for completion
